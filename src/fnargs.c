@@ -150,6 +150,28 @@ static int realign_stack_off(int stack_off)
 #endif
 }
 
+/* Helper function to handle single-register arguments */
+static void handle_single_reg_arg(struct func_arg_spec *spec, int data_len, 
+                                 int *reg_idx, const char *reg_name)
+{
+    spec->arg_flags |= data_len;
+    spec->arg_flags |= FNARGS_REG << FNARGS_LOC_SHIFT;
+    spec->arg_flags |= *reg_idx << FNARGS_REGIDX_SHIFT;
+    dlog("%s", reg_name);
+    (*reg_idx)++;
+}
+
+/* Helper function to handle register-pair arguments */
+static void handle_reg_pair_arg(struct func_arg_spec *spec, int data_len,
+                               int *reg_idx, const char *reg1_name, const char *reg2_name)
+{
+    spec->arg_flags |= data_len;
+    spec->arg_flags |= FNARGS_REG_PAIR << FNARGS_LOC_SHIFT;
+    spec->arg_flags |= *reg_idx << FNARGS_REGIDX_SHIFT;
+    *reg_idx += 2;
+    dlog("%s:%s", reg1_name, reg2_name);
+}
+
 /* Prepare specifications of function arguments capture (happening on BPF side)
  * and post-processing (happening on user space side)
  */
@@ -251,63 +273,47 @@ int prepare_fn_args_specs(int func_id, const struct mass_attacher_func_info *fin
 			data_len = min(true_len, env.args_max_sized_arg_size);
 
 #ifdef __aarch64__
-			/* Special handling for structs in ARM64 */
-			if (btf_is_struct(t) && t->size <= 16) {
-				if (t->size <= 8 && is_arg_in_reg(reg_idx, &reg1_name)) {
-					/* Fits in one register */
-					spec->arg_flags |= data_len;
-					spec->arg_flags |= FNARGS_REG << FNARGS_LOC_SHIFT;
-					spec->arg_flags |= reg_idx << FNARGS_REGIDX_SHIFT;
-					dlog("%s", reg1_name);
-					reg_idx += 1;
-				} else if (t->size <= 16 && 
-						is_arg_in_reg(reg_idx, &reg1_name) && 
-						is_arg_in_reg(reg_idx + 1, &reg2_name)) {
-					/* Passed in a pair of registers */
-					spec->arg_flags |= data_len;
-					spec->arg_flags |= FNARGS_REG_PAIR << FNARGS_LOC_SHIFT;
-					spec->arg_flags |= reg_idx << FNARGS_REGIDX_SHIFT;
-					reg_idx += 2;
-					dlog("%s:%s", reg1_name, reg2_name);
-				} else {
-					/* Fallback to stack */
-					goto use_stack;
-				}
-			} else
+            /* Special handling for structs in ARM64 */
+            if (btf_is_struct(t) && t->size <= 16) {
+                if (t->size <= 8 && is_arg_in_reg(reg_idx, &reg1_name)) {
+                    /* Fits in one register */
+                    handle_single_reg_arg(spec, data_len, &reg_idx, reg1_name);
+                } else if (t->size <= 16 && 
+                        is_arg_in_reg(reg_idx, &reg1_name) && 
+                        is_arg_in_reg(reg_idx + 1, &reg2_name)) {
+                    /* Passed in a pair of registers */
+                    handle_reg_pair_arg(spec, data_len, &reg_idx, reg1_name, reg2_name);
+                } else {
+                    /* Fallback to stack */
+                    goto use_stack;
+                }
+            } else
 #endif
-			if (true_len <= 8 && is_arg_in_reg(reg_idx, &reg1_name)) {
-				/* fits in one register */
-				spec->arg_flags |= data_len;
-				spec->arg_flags |= FNARGS_REG << FNARGS_LOC_SHIFT;
-				spec->arg_flags |= reg_idx << FNARGS_REGIDX_SHIFT;
-				dlog("%s", reg1_name);
-				reg_idx += 1;
-			} else if (true_len <= 16 &&
-				   is_arg_in_reg(reg_idx, &reg1_name) &&
-				   is_arg_in_reg(reg_idx + 1, &reg2_name)) {
-				/* passed in a pair of registers */
-				spec->arg_flags |= data_len;
-				spec->arg_flags |= FNARGS_REG_PAIR << FNARGS_LOC_SHIFT;
-				spec->arg_flags |= reg_idx << FNARGS_REGIDX_SHIFT;
-				reg_idx += 2;
-				dlog("%s:%s", reg1_name, reg2_name);
-			} else {
-				/* passed on the stack */
+            if (true_len <= 8 && is_arg_in_reg(reg_idx, &reg1_name)) {
+                /* fits in one register */
+                handle_single_reg_arg(spec, data_len, &reg_idx, reg1_name);
+            } else if (true_len <= 16 &&
+                   is_arg_in_reg(reg_idx, &reg1_name) &&
+                   is_arg_in_reg(reg_idx + 1, &reg2_name)) {
+                /* passed in a pair of registers */
+                handle_reg_pair_arg(spec, data_len, &reg_idx, reg1_name, reg2_name);
+            } else {
+                /* passed on the stack */
 use_stack:
-				if (stack_off > FNARGS_STACKOFF_MAX) {
-					dlog("fp+%d(TOO LARGE!!!)", stack_off);
-					stack_off = realign_stack_off(stack_off + true_len);
-					spec->arg_flags = FNARGS_STACKOFF_2BIG;
-					goto skip_arg;
-				} else {
-					spec->arg_flags |= data_len;
-					spec->arg_flags |= FNARGS_STACK << FNARGS_LOC_SHIFT;
-					/* stack offset is recorded in 8 byte increments */
-					spec->arg_flags |= (stack_off / 8) << FNARGS_STACKOFF_SHIFT;
-					dlog("fp+%d", stack_off);
-					stack_off = realign_stack_off(stack_off + true_len);
-				}
-			}
+                if (stack_off > FNARGS_STACKOFF_MAX) {
+                    dlog("fp+%d(TOO LARGE!!!)", stack_off);
+                    stack_off = realign_stack_off(stack_off + true_len);
+                    spec->arg_flags = FNARGS_STACKOFF_2BIG;
+                    goto skip_arg;
+                } else {
+                    spec->arg_flags |= data_len;
+                    spec->arg_flags |= FNARGS_STACK << FNARGS_LOC_SHIFT;
+                    /* stack offset is recorded in 8 byte increments */
+                    spec->arg_flags |= (stack_off / 8) << FNARGS_STACKOFF_SHIFT;
+                    dlog("fp+%d", stack_off);
+                    stack_off = realign_stack_off(stack_off + true_len);
+                }
+            }
 			spec->arg_flags |= FNARGS_KIND_RAW << FNARGS_KIND_SHIFT;
 		} else {
 			/* unrecognized, read raw 8 byte value, assume single register */
@@ -594,6 +600,29 @@ print_ellipsis:
 	}
 }
 
+static int pt_regs_btf_id;
+#ifdef __aarch64__
+/* ARM64 register names for better display */
+static const char *arm64_reg_names[] = {
+    "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
+    "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+    "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23",
+    "x24", "x25", "x26", "x27", "x28", "x29", "lr", "sp"
+};
+
+/* Check if a BTF type is ARM64's pt_regs structure */
+static bool is_arm64_pt_regs(const struct btf *btf, const struct btf_type *t)
+{
+    const char *name;
+    
+    if (!btf_is_struct(t))
+        return false;
+        
+    name = btf__name_by_offset(btf, t->name_off);
+    return strcmp(name, "pt_regs") == 0;
+}
+#endif
+
 void emit_ctxargs_data(FILE *f, struct stack_item *s, int indent_shift,
 		       const struct inj_probe_info *inj,
 		       const struct ctx_capture_item *cci)
@@ -648,9 +677,51 @@ void emit_ctxargs_data(FILE *f, struct stack_item *s, int indent_shift,
 			else
 				bnappendf(&b, "<ERR:%d>", len);
 		} else {
+#ifdef __aarch64__
+			/* Special handling for ARM64 pt_regs structure */
+			const struct btf_type *t = btf__type_by_id(info->btf, spec->btf_id);
+			if (is_arm64_pt_regs(info->btf, t)) {
+				/* Format pt_regs with named registers instead of array */
+				struct fmt_buf inner_b = FMT_FILE(f, s->src, 0);
+				const u64 *regs = (const u64 *)data;
+				int j;
+				
+				bnappendf(&b, "&{\n");
+				
+				/* First display the standard registers with names */
+				for (j = 0; j < 31 && j < sizeof(arm64_reg_names)/sizeof(arm64_reg_names[0]); j++) {
+					bnappendf(&inner_b, "%*.s.%s = 0x%llx", 
+						indent_shift + 4, "", 
+						arm64_reg_names[j], regs[j]);
+					
+					if (j < 30) {
+						bnappendf(&inner_b, ",\n");
+					}
+				}
+				
+				/* Then display sp, pc, pstate */
+				bnappendf(&inner_b, ",\n%*.s.sp = 0x%llx,\n", indent_shift + 4, "", regs[31]);
+				bnappendf(&inner_b, "%*.s.pc = 0x%llx,\n", indent_shift + 4, "", regs[32]);
+				bnappendf(&inner_b, "%*.s.pstate = 0x%llx,\n", indent_shift + 4, "", regs[33]);
+				
+				/* Add other important fields */
+				bnappendf(&inner_b, "%*.s.orig_x0 = 0x%llx,\n", indent_shift + 4, "", regs[34]);
+				bnappendf(&inner_b, "%*.s.syscallno = %d\n", indent_shift + 4, "", (int)regs[35]);
+				
+				bnappendf(&b, "%s", inner_b.buf);
+				bnappendf(&b, "%*.s}", indent_shift, "");
+				
+				data += len;
+			} else {
+				fmt_capture_item(&b, info->btf, spec->btf_id, spec->pointee_btf_id,
+						data, len, indent_shift);
+				data += (len + 7) / 8 * 8;
+			}
+#else
 			fmt_capture_item(&b, info->btf, spec->btf_id, spec->pointee_btf_id,
 					data, len, indent_shift);
 			data += (len + 7) / 8 * 8;
+#endif
 		}
 
 		/* append Unicode horizontal ellipsis (single-character triple dots)
@@ -690,8 +761,6 @@ int handle_ctx_capture(struct ctx *ctx, struct session *sess, const struct rec_c
 /* Prepare specifications of context arguments capture (happening on BPF side)
  * and post-processing (happening on user space side) for injected probes.
  */
-
-static int pt_regs_btf_id;
 
 static int prepare_kprobe_ctx_specs(int probe_id,
 				    const struct inj_probe_info *inj,
