@@ -616,10 +616,13 @@ static bool is_arm64_pt_regs(const struct btf *btf, const struct btf_type *t)
 {
     const char *name;
     
-    if (!btf_is_struct(t))
+    if (!btf_is_struct(t)) {
+        dlog("ARM64 pt_regs check: Not a struct\n");
         return false;
+    }
         
     name = btf__name_by_offset(btf, t->name_off);
+    dlog("ARM64 pt_regs check: Found struct with name '%s'\n", name);
     return strcmp(name, "pt_regs") == 0;
 }
 #endif
@@ -681,7 +684,9 @@ void emit_ctxargs_data(FILE *f, struct stack_item *s, int indent_shift,
 #ifdef __aarch64__
 			/* Special handling for ARM64 pt_regs structure */
 			const struct btf_type *t = btf__type_by_id(info->btf, spec->btf_id);
+			dlog("ARM64 path: Checking if type is pt_regs (btf_id=%d)\n", spec->btf_id);
 			if (is_arm64_pt_regs(info->btf, t)) {
+				dlog("ARM64 path: Found pt_regs structure, formatting with named registers\n");
 				/* Format pt_regs with named registers instead of array */
 				struct fmt_buf inner_b = FMT_FILE(f, s->src, 0);
 				const uint64_t *regs = (const uint64_t *)data;
@@ -714,11 +719,13 @@ void emit_ctxargs_data(FILE *f, struct stack_item *s, int indent_shift,
 				
 				data += len;
 			} else {
+				dlog("ARM64 path: Not a pt_regs structure, using default formatting\n");
 				fmt_capture_item(&b, info->btf, spec->btf_id, spec->pointee_btf_id,
 						data, len, indent_shift);
 				data += (len + 7) / 8 * 8;
 			}
 #else
+			dlog("Non-ARM64 path: Using default formatting\n");
 			fmt_capture_item(&b, info->btf, spec->btf_id, spec->pointee_btf_id,
 					data, len, indent_shift);
 			data += (len + 7) / 8 * 8;
