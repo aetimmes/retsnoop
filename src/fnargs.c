@@ -16,6 +16,7 @@
 #include "retsnoop.h"
 #include "kmem_reader.skel.h"
 #include "ksyms.h"
+#include <stdint.h>  /* For uint64_t type */
 
 static struct func_args_info *fn_infos;
 static int fn_info_cnt, fn_info_cap;
@@ -683,7 +684,7 @@ void emit_ctxargs_data(FILE *f, struct stack_item *s, int indent_shift,
 			if (is_arm64_pt_regs(info->btf, t)) {
 				/* Format pt_regs with named registers instead of array */
 				struct fmt_buf inner_b = FMT_FILE(f, s->src, 0);
-				const u64 *regs = (const u64 *)data;
+				const uint64_t *regs = (const uint64_t *)data;
 				int j;
 				
 				bnappendf(&b, "&{\n");
