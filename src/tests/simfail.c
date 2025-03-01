@@ -12,6 +12,7 @@
 #include "tests/kprobe_bad_kfunc.skel.h"
 #include "tests/fentry_unsupp_func.skel.h"
 #include "tests/simple_obj.skel.h"
+#include "tests/stackable_args.skel.h"
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
 
@@ -208,6 +209,27 @@ static void load_bpf_obj_func(long arg)
 	simple_obj_bpf__destroy(skel);
 }
 
+static void load_stackable_args_func(long arg)
+{
+	struct stackable_args_bpf *skel;
+
+	skel = stackable_args_bpf__open_and_load();
+	if (!skel) {
+		fprintf(stderr, "Failed to open/load stackable_args_bpf skeleton!\n");
+		return;
+	}
+
+	if (stackable_args_bpf__attach(skel)) {
+		fprintf(stderr, "Failed to attach stackable_args_bpf program!\n");
+		stackable_args_bpf__destroy(skel);
+		return;
+	}
+
+	// Sleep briefly to allow the program to execute
+	sleep(1);
+
+	stackable_args_bpf__destroy(skel);
+}
 
 static void syscall_long_sleep(long ms)
 {
@@ -249,6 +271,8 @@ struct case_desc {
 
 	{ "bpf", "bpf-simple-obj", load_bpf_obj_func, 0,
 	  "Load and verify a simple BPF object file" },
+	{ "bpf", "bpf-stackable-args", load_stackable_args_func, 0,
+	  "Load and execute a BPF program that tests stack arguments" },
 	{ "syscall", "syscall-long-sleep", syscall_long_sleep, 1000,
 	  "Trigger a long sleep (> 1000 ms)" },
 };
